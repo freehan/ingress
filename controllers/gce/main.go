@@ -44,9 +44,12 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 
+	informerv1 "k8s.io/client-go/informers/core/v1"
+	"k8s.io/client-go/tools/cache"
 	"k8s.io/ingress/controllers/gce/backends"
 	"k8s.io/ingress/controllers/gce/controller"
 	"k8s.io/ingress/controllers/gce/loadbalancers"
+	neg "k8s.io/ingress/controllers/gce/networkendpointgroup"
 	"k8s.io/ingress/controllers/gce/storage"
 	"k8s.io/ingress/controllers/gce/utils"
 	"k8s.io/kubernetes/pkg/cloudprovider"
@@ -250,9 +253,10 @@ func main() {
 	}
 
 	var cloud *gce.GCECloud
+	var namer *utils.Namer
 	if *inCluster || *useRealCloud {
 		// Create cluster manager
-		namer, err := newNamer(kubeClient, *clusterName, controller.DefaultFirewallName)
+		namer, err = newNamer(kubeClient, *clusterName, controller.DefaultFirewallName)
 		if err != nil {
 			glog.Fatalf("%v", err)
 		}
@@ -288,7 +292,6 @@ func main() {
 	}
 
 	ctx := controller.NewControllerContext(kubeClient, *watchNamespace, *resyncPeriod)
-
 	// Start loadbalancer controller
 	lbc, err := controller.NewLoadBalancerController(kubeClient, ctx, clusterManager)
 	if err != nil {
@@ -299,6 +302,14 @@ func main() {
 		glog.V(3).Infof("Cluster name %+v", clusterManager.ClusterNamer.GetClusterName())
 	}
 	clusterManager.Init(&controller.GCETranslator{LoadBalancerController: lbc})
+
+	// Start NEG controller
+	if cloud.AlphaFeatureGate.Enabled(gce.AlphaFeatureNetworkEndpointGroup) {
+		ctx.EndpointInformer = informerv1.NewEndpointsInformer(kubeClient, *watchNamespace, *resyncPeriod, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
+		negController, _ := neg.NewController(kubeClient, cloud, ctx, lbc.Translator, namer, *resyncPeriod)
+		go negController.Run(ctx.StopCh)
+	}
+
 	go registerHandlers(lbc)
 	go handleSigterm(lbc, *deleteAllOnQuit)
 

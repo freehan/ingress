@@ -267,6 +267,14 @@ func (n *Namer) LBName(key string) string {
 	return n.Truncate(fmt.Sprintf("%v%v%v", scrubbedName, clusterNameDelimiter, clusterName))
 }
 
+func (n *Namer) NEGName(namespace, name, port string) string {
+	return fmt.Sprintf("%s-%s-%s-%s", n.NEGPrefix(), namespace, name, port)
+}
+
+func (n *Namer) NEGPrefix() string {
+	return fmt.Sprintf("k8s-%s", n.GetClusterName())
+}
+
 // GCEURLMap is a nested map of hostname->path regex->backend
 type GCEURLMap map[string]map[string]*compute.BackendService
 

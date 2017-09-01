@@ -56,10 +56,11 @@ var (
 
 // ControllerContext holds
 type ControllerContext struct {
-	IngressInformer cache.SharedIndexInformer
-	ServiceInformer cache.SharedIndexInformer
-	PodInformer     cache.SharedIndexInformer
-	NodeInformer    cache.SharedIndexInformer
+	IngressInformer  cache.SharedIndexInformer
+	ServiceInformer  cache.SharedIndexInformer
+	PodInformer      cache.SharedIndexInformer
+	NodeInformer     cache.SharedIndexInformer
+	EndpointInformer cache.SharedIndexInformer
 	// Stop is the stop channel shared among controllers
 	StopCh chan struct{}
 }
@@ -79,6 +80,9 @@ func (ctx *ControllerContext) Start() {
 	go ctx.ServiceInformer.Run(ctx.StopCh)
 	go ctx.PodInformer.Run(ctx.StopCh)
 	go ctx.NodeInformer.Run(ctx.StopCh)
+	if ctx.EndpointInformer != nil {
+		go ctx.EndpointInformer.Run(ctx.StopCh)
+	}
 }
 
 // LoadBalancerController watches the kubernetes api and adds/removes services
@@ -100,7 +104,7 @@ type LoadBalancerController struct {
 	recorder            record.EventRecorder
 	nodeQueue           *taskQueue
 	ingQueue            *taskQueue
-	tr                  *GCETranslator
+	Translator          *GCETranslator
 	stopCh              chan struct{}
 	// stopLock is used to enforce only a single call to Stop is active.
 	// Needed because we allow stopping through an http endpoint and
@@ -195,7 +199,7 @@ func NewLoadBalancerController(kubeClient kubernetes.Interface, ctx *ControllerC
 		// Nodes are updated every 10s and we don't care, so no update handler.
 	})
 
-	lbc.tr = &GCETranslator{&lbc}
+	lbc.Translator = &GCETranslator{&lbc}
 	lbc.tlsLoader = &apiServerTLSLoader{client: lbc.client}
 	glog.V(3).Infof("Created new loadbalancer controller")
 
@@ -283,9 +287,8 @@ func (lbc *LoadBalancerController) sync(key string) (err error) {
 	if err != nil {
 		return err
 	}
-
-	allNodePorts := lbc.tr.toNodePorts(&allIngresses)
-	gceNodePorts := lbc.tr.toNodePorts(&gceIngresses)
+	allNodePorts := lbc.Translator.toNodePorts(&allIngresses)
+	gceNodePorts := lbc.Translator.toNodePorts(&gceIngresses)
 	lbNames := lbc.ingLister.Store.ListKeys()
 	lbs, err := lbc.toRuntimeInfo(gceIngresses)
 	if err != nil {
@@ -358,7 +361,7 @@ func (lbc *LoadBalancerController) sync(key string) (err error) {
 		return syncError
 	}
 
-	if urlMap, err := lbc.tr.toURLMap(&ing); err != nil {
+	if urlMap, err := lbc.Translator.toURLMap(&ing); err != nil {
 		syncError = fmt.Errorf("%v, convert to url map error %v", syncError, err)
 	} else if err := l7.UpdateUrlMap(urlMap); err != nil {
 		lbc.recorder.Eventf(&ing, apiv1.EventTypeWarning, "UrlMap", err.Error())
